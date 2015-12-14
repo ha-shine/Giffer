@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Iterator;
 
+import javax.imageio.IIOException;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageTypeSpecifier;
@@ -14,81 +15,156 @@ import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageOutputStream;
 
-import org.w3c.dom.NamedNodeMap;
-import org.w3c.dom.Node;
+/*
+ * Giffer is a simple java class to make my life easier in creating gif images.
+ * 
+ * Usage :
+ * There are two methods for creating gif images
+ * To generate from files, just pass the array of filename Strings to this method
+ * Giffer.generateFromFiles(String[] filenames, String output, int delay, boolean loop)
+ * 
+ * Or as an alternative you can use this method which accepts an array of BufferedImage
+ * Giffer.generateFromBI(BufferedImage[] images, String output, int delay, boolean loop)
+ * 
+ * output is the name of the output file
+ * delay is time between frames, accepts hundredth of a time. Yeah it's weird, blame Oracle
+ * loop is the boolean for whether you want to make the image loopable.
+ */
 
-public class Giffer {
+public abstract class Giffer {
 	
-	public static void main(String[] args)
+	// Generate gif from an array of filenames
+	// Make the gif loopable if loop is true
+	// Set the delay for each frame according to the delay (ms)
+	// Use the name given in String output for output file
+	public static void generateFromFiles(String[] filenames, String output, int delay, boolean loop)
+		throws IIOException, IOException
 	{
-		ImageOutputStream ios = null;
-		File output = new File("sample-images/out.gif");
-		String[] img_strings = {"cool.png", "cry.png", "love.png", "oh.png"};
-		BufferedImage img = null;
-		ImageWriter gifWriter = ImageIO.getImageWritersByFormatName("gif").next();
+		int length = filenames.length;
+		BufferedImage[] img_list = new BufferedImage[length];
 		
-		try {
-			ios = ImageIO.createImageOutputStream(output);
-		} catch (IOException e) {
-			System.out.println("Cannot create output stream");
-		}
-		
-		gifWriter.setOutput(ios);
-		
-		ImageTypeSpecifier imageType = ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_ARGB);
-		
-		IIOMetadata img_metadata = gifWriter.getDefaultImageMetadata(imageType, null);
-		String native_format = img_metadata.getNativeMetadataFormatName();
-		
-		IIOMetadataNode node_tree = (IIOMetadataNode)img_metadata.getAsTree(native_format);
-		IIOMetadataNode graphics_node = null;
-		
-		System.out.println("node_tree length: " + node_tree.getLength());
-		System.out.println("\nnode_tree items:");
-		for (int i = 0; i < node_tree.getLength(); i++) System.out.println(node_tree.item(i).getNodeName());
-		
-		for (int i = 0; i < node_tree.getLength(); i++)
+		for (int i = 0; i < length; i++)
 		{
-			if(node_tree.item(i).getNodeName().compareToIgnoreCase("GraphicControlExtension") == 0)
-				graphics_node = (IIOMetadataNode) node_tree.item(i);
+			BufferedImage img = ImageIO.read(new File(filenames[i]));
+			img_list[i] = img;
 		}
 		
-		int delayTime = 10;
+		generateFromBI(img_list, output, delay, loop);
+	}
+	
+	// Generate gif from BufferedImage array
+	// Make the gif loopable if loop is true
+	// Set the delay for each frame according to the delay, 100 = 1s
+	// Use the name given in String output for output file
+	public static void generateFromBI(BufferedImage[] images, String output, int delay, boolean loop)
+			throws IIOException, IOException
+	{
+		ImageWriter gifWriter = getWriter();
+		ImageOutputStream ios = getImageOutputStream(output);
+		IIOMetadata metadata = getMetadata(gifWriter, delay, loop);
+
+		gifWriter.setOutput(ios);
+		gifWriter.prepareWriteSequence(null);
+		for (BufferedImage img: images)
+		{
+			IIOImage temp = new IIOImage(img, null, metadata);
+			gifWriter.writeToSequence(temp, null);
+		}
+		gifWriter.endWriteSequence();
+	}
+	
+	// Retrieve gif writer
+	private static ImageWriter getWriter() throws IIOException
+	{
+		Iterator<ImageWriter> itr = ImageIO.getImageWritersByFormatName("gif");
+		if(itr.hasNext())
+			return itr.next();
 		
-		System.out.println("\ngraphics_node: " + graphics_node.getNodeName());
-		graphics_node.setAttribute("delayTime", String.valueOf(delayTime));
+		throw new IIOException("GIF writer doesn't exist on this JVM!");
+	}
+	
+	// Retrieve output stream from the given file name
+	private static ImageOutputStream getImageOutputStream(String output) throws IOException
+	{
+		File outfile = new File(output);
+		return ImageIO.createImageOutputStream(outfile);
+	}
+	
+	// Prepare metadata from the user input, add the delays and make it loopable
+	// based on the method parameters
+	private static IIOMetadata getMetadata(ImageWriter writer, int delay, boolean loop)
+		throws IIOInvalidTreeException
+	{
+		// Get the whole metadata tree node, the name is javax_imageio_gif_image_1.0
+		// Not sure why I need the ImageTypeSpecifier, but it doesn't work without it
+		ImageTypeSpecifier img_type = ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_ARGB);
+		IIOMetadata metadata = writer.getDefaultImageMetadata(img_type, null);
+		String native_format = metadata.getNativeMetadataFormatName();
+		IIOMetadataNode node_tree = (IIOMetadataNode)metadata.getAsTree(native_format);
+		
+		// Set the delay time you can see the format specification on this page
+		// https://docs.oracle.com/javase/7/docs/api/javax/imageio/metadata/doc-files/gif_metadata.html
+		IIOMetadataNode graphics_node = getNode("GraphicControlExtension", node_tree);
+		graphics_node.setAttribute("delayTime", String.valueOf(delay));
 		graphics_node.setAttribute("disposalMethod", "none");
 		graphics_node.setAttribute("userInputFlag", "FALSE");
 		
-		IIOMetadataNode app_exts_node = new IIOMetadataNode("ApplicationExtensions");
-		IIOMetadataNode app_node = new IIOMetadataNode("ApplicationExtension");
+		if(loop)
+			makeLoopy(node_tree);
+		
+		metadata.setFromTree(native_format, node_tree);
+		
+		return metadata;
+	}
+	
+	// Add an extra Application Extension node if the user wants it to be loopable
+	// I am not sure about this part, got the code from StackOverflow
+	// TODO: Study about this
+	private static void makeLoopy(IIOMetadataNode root)
+	{
+		IIOMetadataNode app_extensions = getNode("ApplicationExtensions", root);
+		IIOMetadataNode app_node = getNode("ApplicationExtension", app_extensions);
 		
 		app_node.setAttribute("applicationID", "NETSCAPE");
 		app_node.setAttribute("authenticationCode", "2.0");
 		app_node.setUserObject(new byte[]{ 0x1, (byte) (0 & 0xFF), (byte) ((0 >> 8) & 0xFF)});
 		
-		app_exts_node.appendChild(app_node);
-		node_tree.appendChild(app_exts_node);
+		app_extensions.appendChild(app_node);
+		root.appendChild(app_extensions);
+	}
+	
+	// Retrieve the node with the name from the parent root node
+	// Append the node if the node with the given name doesn't exist
+	private static IIOMetadataNode getNode(String node_name, IIOMetadataNode root)
+	{
+		IIOMetadataNode node = null;
 		
-		try {
-			img_metadata.setFromTree(native_format, node_tree);
-		} catch (IIOInvalidTreeException e) {
-			System.out.println("Cannot set the tree");
+		for (int i = 0; i < root.getLength(); i++)
+		{
+			if(root.item(i).getNodeName().compareToIgnoreCase(node_name) == 0)
+			{
+				node = (IIOMetadataNode) root.item(i);
+				return node;
+			}
 		}
 		
-
+		// Append the node with the given name if it doesn't exist
+		node = new IIOMetadataNode(node_name);
+		root.appendChild(node);
 		
-		try {
-			gifWriter.prepareWriteSequence(null);
-			for (String s: img_strings) {
-				img = ImageIO.read(new File("sample-images/" + s));
-				IIOImage temp = new IIOImage(img, null, img_metadata);
-				gifWriter.writeToSequence(temp, null);
-			}
-			gifWriter.endWriteSequence();
-		} catch (Exception e) {
-			System.out.println("oh no, something went wrong!");
+		return node;
+	}
+	
+	public static void main(String[] args)
+	{
+		String[] img_strings = {"sample-images/cool.png", "sample-images/cry.png", "sample-images/love.png", "sample-images/oh.png"};
+		
+		try
+		{
+			Giffer.generateFromFiles(img_strings, "sample-images/output.gif", 40, true);
+		} catch (Exception ex) 
+		{
+			ex.printStackTrace();
 		}
 	}
-
 }
