@@ -1,5 +1,7 @@
 package shine.htetaung.giffer;
 
+import java.awt.Graphics2D;
+import java.awt.Image;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -39,7 +41,7 @@ public abstract class Giffer {
 	// Use the name given in String output for output file
 	public static void generateFromFiles(String[] filenames, String output, int delay, boolean loop)
 		throws IIOException, IOException
-	{
+	{		
 		int length = filenames.length;
 		BufferedImage[] img_list = new BufferedImage[length];
 		
@@ -59,15 +61,35 @@ public abstract class Giffer {
 	public static void generateFromBI(BufferedImage[] images, String output, int delay, boolean loop)
 			throws IIOException, IOException
 	{
+		int maxWidth = 0;
+		int maxHeight = 0;
 		ImageWriter gifWriter = getWriter();
 		ImageOutputStream ios = getImageOutputStream(output);
 		IIOMetadata metadata = getMetadata(gifWriter, delay, loop);
 
+		//Get bigger Width and Height
+		for (BufferedImage img: images)
+		{
+			if(img.getHeight() > maxHeight){
+				maxHeight = img.getHeight();
+			}
+			if(img.getWidth() > maxWidth){
+				maxWidth = img.getWidth();
+			}
+		}
+				
 		gifWriter.setOutput(ios);
 		gifWriter.prepareWriteSequence(null);
 		for (BufferedImage img: images)
 		{
-			IIOImage temp = new IIOImage(img, null, metadata);
+			BufferedImage dimg = new BufferedImage(maxWidth, maxHeight, BufferedImage.TYPE_INT_ARGB);
+			Image tmp = img.getScaledInstance(img.getWidth(), img.getHeight(), Image.SCALE_DEFAULT);
+			Graphics2D g2d = dimg.createGraphics();
+			int centerWidth = (maxWidth / 2) - (img.getWidth()/2) ;
+			g2d.drawImage(tmp, centerWidth, 0, null);
+		    g2d.dispose();
+		    
+			IIOImage temp = new IIOImage(dimg, null, metadata);
 			gifWriter.writeToSequence(temp, null);
 		}
 		gifWriter.endWriteSequence();
@@ -157,7 +179,7 @@ public abstract class Giffer {
 	
 	public static void main(String[] args)
 	{
-		String[] img_strings = {"sample-images/cool.png", "sample-images/cry.png", "sample-images/love.png", "sample-images/oh.png"};
+		String[] img_strings = {"sample-images/cool.png", "sample-images/cry.png", "sample-images/love.png", "sample-images/oh.png", "sample-images/laugh.png"};
 		
 		try
 		{
